@@ -11,6 +11,7 @@ from tkinter.ttk import Style, Button, Label, Entry
 from gui.gui_cliente import GuiCliente
 
 from models.cliente import Cliente
+from models.i_serv_mensagens import servidorMensagens
 
 TELA_NORMAL = "270x115"
 
@@ -65,9 +66,8 @@ class GuiObjectBuilder:
       try:
         clienteNovo = Cliente(self.varNome.get())
         usuarioGui = GuiCliente(clienteNovo, self.janela)
-        usuarioGui.iniciaAplicacao()
-
         self.preparaNovoInput()
+        usuarioGui.iniciaAplicacao()
       except Exception as e:
         return False
 
@@ -85,6 +85,9 @@ class GuiObjectBuilder:
       return False
     if not nome.isalnum():
       self.lblErroNome.configure(text="Não use pontuações")
+      return False
+    if not servidorMensagens.adicionarUsuario(nome):
+      self.lblErroNome.configure(text="Nome já cadastrado")
       return False
     return True
 

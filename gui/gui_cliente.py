@@ -7,104 +7,106 @@ sys.path.append(os.path.dirname(SCRIPT_DIR))
 import paho.mqtt.client as mqtt
 from threading import Thread
 
-from tkinter import Toplevel, Tk, StringVar, Listbox, Scrollbar, Event
+from tkinter import Toplevel, Tk, StringVar, BooleanVar, Listbox, Scrollbar, Entry, Checkbutton
 from tkinter.font import Font
-from tkinter.ttk import Style, Label
+from tkinter.ttk import Style, Label, Button
 from typing import Literal, Any, Callable
 
 from models.cliente import Cliente
-from models.topicos import topicosMOM
+from models.i_serv_mensagens import servidorMensagens
+from pygame import mixer
+import time
 
 CallbackOnMessage = Callable[[mqtt.Client, Any, mqtt.MQTTMessage], None]
 TipoSensor = Literal["Temperatura", "Humidade", "Velocidade"]
 
-def TELA_ATIVO(qtdSensor: int): return f"500x{300 + 20 * qtdSensor}"
+TELA_ATIVO = "500x300"
+TELA_ADD_AMIGO = "700x300"
 
 class GuiCliente:
   def __init__(self, cliente: Cliente, raiz: Tk):
     self.raiz = raiz
     self.cliente = cliente
-    self.sensoresInscritos = []
+    self.amizades = []
+    self.online = True
+    mixer.init()
 
   def inicializaCliente(self):
-    self.cliente.inscreverTopico(topicosMOM.mudanca_topico)
-    
     thread_client = Thread(target=self.cliente.inicializaCliente, args=[self.onMessageClient()], daemon=True)
     thread_client.start()
 
-  def atualizaTopicos(self, inicio=False, remove: str = None):
-    if remove != None:
-      i = int(remove)
-      lbl = self.listLblAssinados[i]
-      if lbl != None:
-        self.listLblAssinados[i].destroy()
-      self.listLblAssinados.pop(i)
-      selecionados: list[int] = list(self.lbxSensores.curselection())
-      for idx in selecionados:
-        if idx == i:
-          self.lbxSensores.selection_clear(idx)
-        elif idx > i:
-          self.lbxSensores.selection_clear(idx)
-          self.lbxSensores.selection_set(idx - 1)
-
-
-    lstTopicos = []
-    for topico in topicosMOM.topicos:
-      sensor = topico.split("/")[1]
-      lstTopicos.append(sensor)
-      if inicio or len(topicosMOM.topicos) > len(self.listLblAssinados):
-        self.listLblAssinados.append(None)
-
-    self.onselect()
-    
-    self.varTopicos.set(value=lstTopicos)
-
-  def onselect(self):
+  def onselectConversa(self):
     try:
-      selecionados: list[int] = list(self.lbxSensores.curselection())
+      selecionados: list[int] = list(self.lbxAmigos.curselection())
+      if len(selecionados) == 0: pass
+      elif len(selecionados) == 1: self.conversaAtual = selecionados[0]
+      else:
+        selecionados.remove(self.conversaAtual)
 
-      indice = 0
-      for index in range(len(topicosMOM.topicos)):
-        topico = topicosMOM.topicos[index]
-        if index in selecionados:
-          self.cliente.inscreverTopico(topico)
-          if self.listLblAssinados[index] == None:
-            self.listLblAssinados[index] = Label(self.janela, text=topico.split("/")[1], style="Peq.Label")
-          self.listLblAssinados[index].place(x=260, y=70 + (indice * 15))
-          indice += 1
-
-        else:
-          self.cliente.desinscrever(topico)
-          if self.listLblAssinados[index] != None:
-            self.listLblAssinados[index].destroy()
-            self.listLblAssinados[index] = None
+        self.lbxAmigos.selection_clear(self.conversaAtual, self.conversaAtual)
+        self.lbxAmigos.selection_set(selecionados[0], selecionados[0])
+        self.conversaAtual = selecionados[0]
+      if len(selecionados) > 0:
+        self.mensagens = servidorMensagens.receberMensagens(self.cliente.nome, self.amizades[selecionados[0]])
+        self.varMensagens.set(value=self.mensagens)
+        self.inputNovaMsg.focus_set()
     except Exception as e:
-      print(f"ERRO onselect: {e}")
+      print(f"ERRO onselect: {self.cliente.nome ,e}")
       return False
+
+  def finalizarAddAmigo(self):
+      self.lbxNovosAmigos.destroy()
+      self.janela.geometry(TELA_ATIVO)
+      self.btnNovoAmigo.configure(text="Adicionar Amigo", command=lambda: self.criaComponentesAddAmigo())
+
+  def onselectNovoAmigo(self):
+    try:
+      selecionado: int = list(self.lbxNovosAmigos.curselection())[0]
+      usuarios = [usr for usr in servidorMensagens.usuarios]
+      amizade = usuarios[selecionado]
+      if amizade == self.cliente.nome or amizade in self.amizades:
+        self.lbxNovosAmigos.select_clear(selecionado)
+        return
+      self.amizades.append(amizade)
+      self.varAmizades.set(value=self.amizades)
+      self.cliente.adicionarAmigo(amizade)
+      servidorMensagens.adicionarAmigo(self.cliente.nome, amizade)
+      self.finalizarAddAmigo()
+    except Exception as e:
+      print(f"ERRO onselectNovo amigo: {e}")
+      return False
+
+  def notificacao(self, naConversa=False):
+    mixer.music.load("assets/mensagem-conversa.mp3" if naConversa else "assets/notificacao.mp3")
+    mixer.music.set_volume(0.7)
+    mixer.music.play()
 
   def onMessageClient(self) -> CallbackOnMessage:
     def onMessageFunc(cli: mqtt.Client, userdata: Any, message: mqtt.MQTTMessage):
       msg = message.payload.decode()
       topico = message.topic
+      remetente = topico.split("/")[1]
 
-      if topico.endswith("topics_change"):
-        if msg.startswith("remove"):
-          self.atualizaTopicos(remove=msg.split(":")[1])
-        else:
-          self.atualizaTopicos()
-      elif topico.startswith("critic"):
-        indexTpc = topicosMOM.topicos.index(topico.split("critic")[1])
-        self.listLblAssinados[indexTpc].configure(text=f"{topico.split("/")[1]}: {msg}", style="Err.Label")
+      if self.conversaAtual >= 0 and remetente == self.amizades[self.conversaAtual]:
+        self.notificacao(naConversa=True)
+        self.mensagens = servidorMensagens.receberMensagens(self.cliente.nome, remetente)
+        self.varMensagens.set(value=self.mensagens)
       else:
-        indexTpc = topicosMOM.topicos.index(topico)
-        self.listLblAssinados[indexTpc].configure(text=f"{topico.split("/")[1]}: {msg}", style="Peq.Label")
-    
+        # index = self.amizades.index(remetente)
+        lblIndNvMsg = Label(self.janela, text=f"Mensagem de {remetente}", style="Plc.Label")
+        lblIndNvMsg.place(x=300, y=150)
+        self.notificacao()
+        def removerAlerta():
+          time.sleep(2)
+          lblIndNvMsg.destroy()
+        threadLimparAlerta = Thread(target=removerAlerta, daemon=True)
+        threadLimparAlerta.start()
     return onMessageFunc
 
   def criaComponenteJanela(self):
     self.janela = Toplevel(self.raiz)
-    self.janela.title("IoT - CLiente MOM")
-    self.janela.geometry(TELA_ATIVO(0))
+    self.janela.title("Atizapi - Chat Online")
+    self.janela.geometry(TELA_ATIVO)
     self.janela.resizable(False, False)
 
   def criaComponenteEstilos(self):
@@ -114,47 +116,124 @@ class GuiCliente:
     style = Style()
     style.configure("Gen.Label", font=self.fonteGeral)
     style.configure("Peq.Label", font=self.fonteLeitura)
+    style.configure("Plc.Label", font=self.fonteLeitura, foreground="#A0A0A0")
     style.configure("Err.Label", font=self.fonteLeitura, foreground="#F02424")
-    style.configure("NSensor.TButton", width=11, font=self.fonteGeral)
-    style.configure("NCliente.TButton", width=12, font=self.fonteGeral)
-    style.configure("Sensor.TButton", width=12, font=self.fonteGeral)
+    style.configure("Enviar.TButton", width=8, font=self.fonteGeral)
+    style.configure("Add.TButton", width=15, font=self.fonteGeral)
 
-  def criaInicilizadorCliente(self):
-    self.varTopicos = StringVar(value=[])
+  def enviarMensagem(self):
+    if self.conversaAtual == -1: return
+    destino = self.amizades[self.conversaAtual]
+    msg = self.varNovaMsg.get()
+    servidorMensagens.enviarMensagem(self.cliente.nome, destino, msg)
+    self.varNovaMsg.set("")
+    self.mensagens = servidorMensagens.receberMensagens(self.cliente.nome, destino)
+
+    self.varMensagens.set(value=self.mensagens)
+
+  def criaInicializadorCliente(self):
+    self.varAmizades = StringVar(value=[])
+    self.varMensagens = StringVar(value=[])
+    self.varOnline = BooleanVar(value=True)
     self.varNomeSensor = StringVar()
+    self.varNovaMsg = StringVar()
     self.varLeituras: list[StringVar] = []
 
-    yscrollbar = Scrollbar(self.janela) 
+    self.mensagens = []
+
+    self.conversaAtual = -1
+
+    yscrollbar = Scrollbar(self.janela)
+
+    def toggleCheckbox():
+      self.online = self.varOnline.get()
+      servidorMensagens.mudarStatus(self.cliente.nome, self.online)
+      if self.online and self.conversaAtual != -1:
+        msgAtual = servidorMensagens.receberMensagens(self.cliente.nome, self.amizades[self.conversaAtual])
+        if len(msgAtual) > len(self.mensagens):
+          self.notificacao(naConversa=True)
+          self.mensagens = msgAtual[:]
+          self.varMensagens.set(value=self.mensagens)
+
   
     self.listLblAssinados: list[Label | None] = []
     self.lblNomeCliente = Label(self.janela, text=f"Cliente: {self.cliente.nome}", style="Gen.Label")
-    self.lblAssinarSensores = Label(self.janela, text="Assinar sensores", style="Gen.Label")
-    self.lblInfoAssinados = Label(self.janela, text="Sensores assinados", style="Gen.Label")
+    self.chkbtnOnline = Checkbutton(
+      self.janela,
+      text="Online",
+      variable=self.varOnline,
+      onvalue=True,
+      offvalue=False,
+      command=toggleCheckbox
+    )
+    self.inputNovaMsg = Entry(self.janela, textvariable=self.varNovaMsg, width=16, font=self.fonteGeral)
+    self.btnNovaMsg = Button(self.janela, text="Enviar", command=lambda : self.enviarMensagem(), style="Enviar.TButton")
+    self.btnNovoAmigo = Button(self.janela, text="Adicionar Amigo", command=lambda: self.criaComponentesAddAmigo(), style="Add.TButton")
+    self.lblIndcadorAmigos = Label(self.janela, text="Seus amigos", style="Gen.Label")
+    self.lblIndicadorConversa = Label(self.janela, text="Conversa", style="Gen.Label")
+    self.lblNovaMsg = Label(self.janela, text="Nova mensagem", style="Plc.Label")
 
-    self.lbxSensores = Listbox(
+    self.lbxAmigos = Listbox(
       self.janela,
       selectmode="multiple",
       width=34,
-      height=10,
+      height=11,
       font=self.fonteLeitura,
       yscrollcommand=yscrollbar.set,
-      listvariable=self.varTopicos,
+      listvariable=self.varAmizades, 
+    )
+    self.lbxConversa = Listbox(
+      self.janela,
+      selectmode="multiple",
+      width=34,
+      height=9,
+      font=self.fonteLeitura,
+      listvariable=self.varMensagens,
     )
 
-    self.lblNomeCliente.place(x=30, y=10 )
-    self.lblAssinarSensores.place(x=30, y=50)
-    self.lblInfoAssinados.place(x=260, y=50)
+    self.lblNomeCliente.place(x=30, y=10)
+    self.chkbtnOnline.place(x=250, y=10)
+    self.lblIndcadorAmigos.place(x=30, y=50)
+    self.lblIndicadorConversa.place(x=260, y=50)
 
-    self.lbxSensores.place(x=30, y=70)
+    self.lbxAmigos.place(x=30, y=70)
+    self.lbxConversa.place(x=260, y=70)
+    self.inputNovaMsg.place(x=260, y=250)
+    self.btnNovaMsg.place(x=400, y=248)
+    self.lblNovaMsg.place(x=260, y=275)
+
+    self.btnNovoAmigo.place(x=340, y=7)
+
     yscrollbar.place(x=236, y=70, height=3+ 10 * 19, width=17)
-    yscrollbar.configure(command=self.lbxSensores.yview)
+    yscrollbar.configure(command=self.lbxAmigos.yview)
 
-    self.lbxSensores.bind('<<ListboxSelect>>', lambda _: self.onselect())
+    self.lbxAmigos.bind('<<ListboxSelect>>', lambda _: self.onselectConversa())
+    def bindEnter(kc):
+      if kc == 13: # Pressionou enter
+        self.enviarMensagem()
+    self.inputNovaMsg.bind("<Key>", lambda e: bindEnter(e.keycode))
+
+  def criaComponentesAddAmigo(self):
+    self.btnNovoAmigo.configure(text="Cancelar", command=lambda: self.finalizarAddAmigo())
+
+    self.janela.geometry(TELA_ADD_AMIGO)
+    varNovasAmizades = StringVar(value=[usr if usr != self.cliente.nome else f"{usr} - Você" for usr in servidorMensagens.usuarios])
+
+    self.btnNovaMsg
+    self.lbxNovosAmigos = Listbox(
+      self.janela,
+      selectmode="multiple",
+      width=34,
+      height=9,
+      font=self.fonteLeitura,
+      listvariable=varNovasAmizades, 
+    )
+    self.lbxNovosAmigos.place(x=480, y=70)
+    self.lbxNovosAmigos.bind('<<ListboxSelect>>', lambda _: self.onselectNovoAmigo())
 
 
   def iniciaAplicacao(self):
     self.criaComponenteJanela()
-    self.criaComponenteEstilos()
-    self.criaInicilizadorCliente()
-    self.atualizaTopicos(inicio=True)
     self.inicializaCliente()
+    self.criaComponenteEstilos()
+    self.criaInicializadorCliente()

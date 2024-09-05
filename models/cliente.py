@@ -1,6 +1,5 @@
 import paho.mqtt.client as mqtt
 from typing import Callable, Any
-from threading import Thread
 
 CallbackOnMessage = Callable[[mqtt.Client, Any, mqtt.MQTTMessage], None]
 
@@ -16,10 +15,9 @@ class Cliente:
 
     self.client.loop_forever()
 
-  def inscreverTopico(self, topico: str):
+  def adicionarAmigo(self, novoAmigo: str):
+    topico = f"{self.nome}/{novoAmigo}"
     self.client.subscribe(topico)
-    self.client.subscribe(f"critic{topico}")
 
-  def desinscrever(self, topico: str):
-    self.client.unsubscribe(topico)
-    self.client.unsubscribe(f"critic{topico}")
+  def desfazerAmizade(self, novoAmigo: str):
+    self.client.unsubscribe(f"{self.nome}/{novoAmigo}")
